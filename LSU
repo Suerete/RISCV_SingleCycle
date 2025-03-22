@@ -1,0 +1,110 @@
+module LSU (
+    input  logic        i_clk,         // Xung clock
+    input  logic        i_reset,       // Tín hiệu reset (active low)
+    input  logic [31:0] i_lsu_addr,    // Địa chỉ bộ nhớ
+    input  logic [31:0] i_st_data,     // Dữ liệu cần ghi
+    input  logic [2:0]  i_lsu_op,      // Loại lệnh load/store (LB, LH, LW, SB, SH, SW)
+    input  logic        i_lsu_wren,    // Tín hiệu cho phép ghi (1: ghi, 0: đọc)
+    output logic [31:0] o_ld_data,     // Dữ liệu đọc từ bộ nhớ
+    output logic [31:0] o_io_ledr,     // Điều khiển đèn LED đỏ
+    output logic [31:0] o_io_ledg,     // Điều khiển đèn LED xanh lá
+    output logic [6:0]  o_io_hex0,     // Điều khiển màn hình 7 đoạn HEX0
+    output logic [6:0]  o_io_hex1,     // Điều khiển màn hình 7 đoạn HEX1
+    output logic [6:0]  o_io_hex2,     // Điều khiển màn hình 7 đoạn HEX2
+    output logic [6:0]  o_io_hex3,     // Điều khiển màn hình 7 đoạn HEX3
+    output logic [6:0]  o_io_hex4,     // Điều khiển màn hình 7 đoạn HEX4
+    output logic [6:0]  o_io_hex5,     // Điều khiển màn hình 7 đoạn HEX5
+    output logic [6:0]  o_io_hex6,     // Điều khiển màn hình 7 đoạn HEX6
+    output logic [6:0]  o_io_hex7,     // Điều khiển màn hình 7 đoạn HEX7
+    output logic [31:0] o_io_lcd,      // Điều khiển thanh ghi LCD
+    input  logic [31:0] i_io_sw        // Dữ liệu từ công tắc
+);
+
+    // Bộ nhớ dữ liệu (2 KiB)
+    logic [31:0] data_memory [0:511];  // 512 ô nhớ, mỗi ô 32-bit
+
+    // Bộ nhớ ngoại vi (LED, LCD, v.v.)
+    logic [31:0] io_memory [0:15];     // 16 ô nhớ, mỗi ô 32-bit
+
+    // Bộ nhớ công tắc (Switches)
+    logic [31:0] sw_memory [0:3];      // 4 ô nhớ, mỗi ô 32-bit
+
+    // Khởi tạo toàn bộ bộ nhớ về 0
+    initial begin
+        data_memory = '{default: 32'h0};  // Khởi tạo bộ nhớ dữ liệu về 0
+        io_memory = '{default: 32'h0};    // Khởi tạo bộ nhớ ngoại vi về 0
+        sw_memory = '{default: 32'h0};    // Khởi tạo bộ nhớ công tắc về 0
+    end
+
+    // Xử lý địa chỉ và chọn vùng bộ nhớ
+    logic [31:0] mem_data;
+    assign mem_data = (i_lsu_addr >= 32'h1001_0000 && i_lsu_addr <= 32'h1001_0FFF) ? sw_memory[i_lsu_addr[3:2]] :  // Đọc từ bộ nhớ công tắc
+                      (i_lsu_addr >= 32'h1000_0000 && i_lsu_addr <= 32'h1000_4FFF) ? io_memory[i_lsu_addr[5:2]] :  // Đọc từ bộ nhớ ngoại vi
+                      data_memory[i_lsu_addr[9:2]]; // Đọc từ bộ nhớ dữ liệu
+
+    // Xử lý lệnh load
+    always_comb begin
+        case (i_lsu_op)
+            3'b000: o_ld_data = {{24{mem_data[7]}}, mem_data[7:0]};   // LB (load byte có dấu)
+            3'b001: o_ld_data = {24'h0, mem_data[7:0]};               // LBU (load byte không dấu)
+            3'b010: o_ld_data = {{16{mem_data[15]}}, mem_data[15:0]}; // LH (load half-word có dấu)
+            3'b011: o_ld_data = {16'h0, mem_data[15:0]};              // LHU (load half-word không dấu)
+            3'b100: o_ld_data = mem_data;                             // LW (load word)
+            default: o_ld_data = 32'h0;                               // Mặc định
+        endcase
+    end
+
+    // Xử lý lệnh store
+    always_ff @(posedge i_clk or negedge i_reset) begin
+        if (!i_reset) begin
+            // Reset toàn bộ bộ nhớ về 0
+            data_memory <= '{default: 32'h0};  // Reset bộ nhớ dữ liệu
+            io_memory <= '{default: 32'h0};    // Reset bộ nhớ ngoại vi
+            sw_memory <= '{default: 32'h0};    // Reset bộ nhớ công tắc
+        end else if (i_lsu_wren) begin
+            case (i_lsu_op)
+                3'b101: begin // SB (store byte)
+                    if (i_lsu_addr >= 32'h1001_0000 && i_lsu_addr <= 32'h1001_0FFF) begin
+                        sw_memory[i_lsu_addr[3:2]][7:0] <= i_st_data[7:0];
+                    end else if (i_lsu_addr >= 32'h1000_0000 && i_lsu_addr <= 32'h1000_4FFF) begin
+                        io_memory[i_lsu_addr[5:2]][7:0] <= i_st_data[7:0];
+                    end else begin
+                        data_memory[i_lsu_addr[9:2]][7:0] <= i_st_data[7:0];
+                    end
+                end
+                3'b110: begin // SH (store half-word)
+                    if (i_lsu_addr >= 32'h1001_0000 && i_lsu_addr <= 32'h1001_0FFF) begin
+                        sw_memory[i_lsu_addr[3:2]][15:0] <= i_st_data[15:0];
+                    end else if (i_lsu_addr >= 32'h1000_0000 && i_lsu_addr <= 32'h1000_4FFF) begin
+                        io_memory[i_lsu_addr[5:2]][15:0] <= i_st_data[15:0];
+                    end else begin
+                        data_memory[i_lsu_addr[9:2]][15:0] <= i_st_data[15:0];
+                    end
+                end
+                3'b111: begin // SW (store word)
+                    if (i_lsu_addr >= 32'h1001_0000 && i_lsu_addr <= 32'h1001_0FFF) begin
+                        sw_memory[i_lsu_addr[3:2]] <= i_st_data;
+                    end else if (i_lsu_addr >= 32'h1000_0000 && i_lsu_addr <= 32'h1000_4FFF) begin
+                        io_memory[i_lsu_addr[5:2]] <= i_st_data;
+                    end else begin
+                        data_memory[i_lsu_addr[9:2]] <= i_st_data;
+                    end
+                end
+            endcase
+        end
+    end
+
+    // Kết nối bộ nhớ ngoại vi với các thiết bị
+    assign o_io_ledr = io_memory[0];  // LED đỏ
+    assign o_io_ledg = io_memory[1];  // LED xanh lá
+    assign o_io_hex0 = io_memory[2][6:0];  // HEX0
+    assign o_io_hex1 = io_memory[3][6:0];  // HEX1
+    assign o_io_hex2 = io_memory[4][6:0];  // HEX2
+    assign o_io_hex3 = io_memory[5][6:0];  // HEX3
+    assign o_io_hex4 = io_memory[6][6:0];  // HEX4
+    assign o_io_hex5 = io_memory[7][6:0];  // HEX5
+    assign o_io_hex6 = io_memory[8][6:0];  // HEX6
+    assign o_io_hex7 = io_memory[9][6:0];  // HEX7
+    assign o_io_lcd  = io_memory[10];      // LCD
+	 
+endmodule
